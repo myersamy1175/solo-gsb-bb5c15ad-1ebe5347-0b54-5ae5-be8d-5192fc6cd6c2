@@ -56,14 +56,28 @@ def robust_params(values: Sequence[float]) -> tuple[float, float, float]:
 
 
 def competition_rank(pairs: Iterable[tuple[Any, float]]) -> dict[Any, int]:
-    """Rank (key, total) pairs highest-first with competition ranking (1224)."""
+    """Rank (key, total) pairs highest-first with competition ranking (1224).
+
+    并列组成员资格由**本组最高分锚定**：先按分数降序排列，从每组的最高分
+    （锚点）起，只要后续分数与锚点之差在 ``TIE_EPS`` 内就继续留在本组；
+    一旦某个分数相对锚点超出容差，它即成为下一组的新锚点。组的名次取其
+    第一个位置（1 起），因此输出形如 1、1、3。
+
+    不能只比较相邻两人的成绩：若依次按相邻比较（90、90−0.6e-9、
+    90−1.2e-9，每对相邻都在容差内），链式传递会把与最高分差已达 2 倍容差
+    的第三人也误并入第一组；锚定组首即可切断这种链式扩散。组内同分（容差
+    内）按键名稳定排序，保证同分者输出次序确定。
+    """
     ordered = sorted(pairs, key=lambda p: (-p[1], str(p[0])))
     ranks: dict[Any, int] = {}
+    group_start = 0
     for i, (key, total) in enumerate(ordered):
-        if i > 0 and abs(total - ordered[i - 1][1]) <= TIE_EPS:
-            ranks[key] = ranks[ordered[i - 1][0]]
-        else:
-            ranks[key] = i + 1
+        if i == group_start:
+            anchor = total  # 新并列组的首个（最高）分锚定本组。
+        elif abs(anchor - total) > TIE_EPS:
+            anchor = total
+            group_start = i
+        ranks[key] = group_start + 1
     return ranks
 
 
@@ -329,12 +343,20 @@ def analyze(
         block["rank_delta"] = raw_rank[name] - cal_rank[name]  # >0: moved up
 
     # Pairwise rank reversals between raw ranking and calibrated ranking.
+    # 直接以修正后的竞赛名次为准：任一名次口径下并列（名次相同）的选手对
+    # 不构成反转；两侧都有明确优胜者且优胜者易位才计入，保证反转判定与
+    # raw_rank / cal_rank 永远一致（不再另做一套相邻容差比较）。
     reversals: list[dict[str, Any]] = []
     for i, a in enumerate(contestants):
         for b in contestants[i + 1:]:
             ra, rb = raw_totals[a], raw_totals[b]
             ca, cb = cal_totals[a], cal_totals[b]
-            if ra > rb + TIE_EPS and cb > ca + TIE_EPS:
+            raw_a_better = raw_rank[a] < raw_rank[b]
+            cal_a_better = cal_rank[a] < cal_rank[b]
+            tied = raw_rank[a] == raw_rank[b] or cal_rank[a] == cal_rank[b]
+            if tied or raw_a_better == cal_a_better:
+                continue
+            if raw_a_better:
                 reversals.append(
                     {
                         "winner_before": a,
@@ -347,7 +369,7 @@ def analyze(
                         "cal_gap": cb - ca,
                     }
                 )
-            elif rb > ra + TIE_EPS and ca > cb + TIE_EPS:
+            else:
                 reversals.append(
                     {
                         "winner_before": b,

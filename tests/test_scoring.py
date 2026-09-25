@@ -44,6 +44,44 @@ class TestRank(unittest.TestCase):
         self.assertEqual(ranks["c"], 3)
         self.assertEqual(ranks["d"], 4)
 
+    def test_tie_anchored_to_group_high_no_chain_diffusion(self):
+        # 相邻两人差都在容差内，但第三人与组最高分（锚点）的差已超出容差：
+        # 旧的逐对相邻比较会链式扩散，把三人误排为并列第一。
+        eps = 1e-9
+        pairs = [
+            ("a", 90.0),
+            ("b", 90.0 - 0.6 * eps),
+            ("c", 90.0 - 1.2 * eps),
+        ]
+        ranks = competition_rank(pairs)
+        self.assertEqual(ranks, {"a": 1, "b": 1, "c": 3})
+
+    def test_anchor_chains_only_within_eps_of_group_high(self):
+        # 五人依次相差 0.9e-9：相对各组锚点超界即开启下一组 -> 1,1,3,3,5。
+        eps = 1e-9
+        pairs = [("p%d" % k, 90.0 - k * 0.9 * eps) for k in range(5)]
+        self.assertEqual(
+            competition_rank(pairs),
+            {"p0": 1, "p1": 1, "p2": 3, "p3": 3, "p4": 5},
+        )
+
+    def test_within_eps_group_ranks_one_one_three(self):
+        # 全部落在锚点容差内才是并列；下一组名次按累计人数跳过（1、1、3）。
+        eps = 1e-9
+        ranks = competition_rank(
+            [("a", 90.0), ("b", 90.0 - 0.4 * eps), ("c", 89.0)]
+        )
+        self.assertEqual(ranks, {"a": 1, "b": 1, "c": 3})
+
+    def test_tie_member_order_stable_by_name(self):
+        # 同分时按键名稳定排序：无论输入次序如何，同组名次一致且并列块内
+        # 名称次序确定（此处仅验证名次结果与降序分组）。
+        ranks = competition_rank([("c", 10.0), ("a", 10.0), ("b", 9.5)])
+        self.assertEqual(ranks, {"a": 1, "c": 1, "b": 3})
+
+    def test_empty(self):
+        self.assertEqual(competition_rank([]), {})
+
 
 class TestCalibration(unittest.TestCase):
     def setUp(self):
@@ -130,6 +168,30 @@ class TestCalibration(unittest.TestCase):
         blocks = {b["contestant"]: b for b in a["contestants"]}
         self.assertEqual(blocks["C1"]["cal_rank"], 1)
         self.assertEqual(blocks["C2"]["raw_rank"], 1)
+
+    def test_rank_tie_chain_not_diffused_across_all_three_kinds(self):
+        # 单一评委、单一项目，全部「保留原分」=> 原分/校准分/最终分同构。
+        # 相邻分差 0.6e-9 在容差内，但 C3 与最高分锚点差 1.2e-9 已超界，
+        # 三个名次口径都必须是 C1=C2 第 1、C3 第 3，且不产生反转。
+        eps = 1e-9
+        data = [
+            ("C1", "J", "I", 90.0),
+            ("C2", "J", "I", 90.0 - 0.6 * eps),
+            ("C3", "J", "I", 90.0 - 1.2 * eps),
+        ]
+        records = recs(data)
+        a = analyze(records, {r["id"]: (True, "raw") for r in records}, "judge")
+        blocks = {b["contestant"]: b for b in a["contestants"]}
+        for kind in ("raw_rank", "cal_rank", "eff_rank"):
+            self.assertEqual(blocks["C1"][kind], 1, kind)
+            self.assertEqual(blocks["C2"][kind], 1, kind)
+            self.assertEqual(blocks["C3"][kind], 3, kind)
+        # 同组两人名称稳定排序：C1 在 C2 前；C3 另起一组随后。
+        self.assertEqual(
+            [b["contestant"] for b in a["contestants"]], ["C1", "C2", "C3"]
+        )
+        # C3 与 C1 并非两侧都互有明确优胜方向（C1/C2 在原始分并列），无反转。
+        self.assertEqual(a["reversals"], [])
 
     def test_empty(self):
         a = analyze([], {}, "judge")

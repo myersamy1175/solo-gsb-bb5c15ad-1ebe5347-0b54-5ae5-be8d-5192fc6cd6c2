@@ -115,6 +115,24 @@ class TestPendingRankBounds(unittest.TestCase):
         # C3 固定为 19，被两人超过 → 最好=最差=3。
         self.assertEqual((rows["C3"]["best_rank"], rows["C3"]["worst_rank"]), (3, 3))
 
+    def test_best_worst_ranks_anchor_ties_no_chain_diffusion(self):
+        # 三人在唯一项目 I1 上各有 1 条评分，target=1 => 缺口 0，总分区间
+        # 退化为现值。相邻分差 0.6e-9 在容差内，但 C3 与最高分锚点差 1.2e-9
+        # 已超界：最好/最差名次都必须是 C1=C2 第 1、C3 第 3，不得链式扩散
+        # 成三人并列第一（旧的「严格高于本人人数+1」相邻比较会给出 1,1,1）。
+        eps = 1e-9
+        rows_data = [
+            ("C1", "J", "I1", 90.0),
+            ("C2", "J", "I1", 90.0 - 0.6 * eps),
+            ("C3", "J", "I1", 90.0 - 1.2 * eps),
+        ]
+        rows = by_name(run(rows=rows_data, item="I1", target=1, lo=0.0, hi=10.0))
+        for name in ("C1", "C2", "C3"):
+            self.assertEqual(rows[name]["gap"], 0)
+        self.assertEqual((rows["C1"]["best_rank"], rows["C1"]["worst_rank"]), (1, 1))
+        self.assertEqual((rows["C2"]["best_rank"], rows["C2"]["worst_rank"]), (1, 1))
+        self.assertEqual((rows["C3"]["best_rank"], rows["C3"]["worst_rank"]), (3, 3))
+
     def test_gap_zero_when_target_equals_existing(self):
         # target=2：C1 已有 2 条 → 缺口 0，均分/总分区间退化为现值。
         rows = by_name(run(target=2, lo=0.0, hi=10.0))

@@ -80,20 +80,28 @@ class TestPendingRankAPI(unittest.TestCase):
         self.assertIsNone(rows["C3"]["current_item_avg"])
         self.assertFalse(rows["C3"]["has_item"])
 
-    def test_02_rank_bounds_match_formula(self):
+    def test_02_rank_bounds_match_anchor_ranking(self):
+        from app.scoring import competition_rank
+
         data = client.post(URL, json=BODY).json()
         rows = data["contestants"]
+
+        def anchored_rank(target, own_key, other_key):
+            # 与主排名一致的锚定分组：按极端情形总分降序，成员资格相对本组
+            # 最高分锚定（而非逐对相邻比较），名次取并列组首个位置（1224）。
+            vec = {
+                r["contestant"]: (r[own_key] if r is target else r[other_key])
+                for r in rows
+            }
+            return competition_rank(vec.items())[target["contestant"]]
+
         for row in rows:
-            best = 1 + sum(
-                1 for o in rows if o["contestant"] != row["contestant"]
-                and o["total_min"] > row["total_max"] + 1e-9
+            self.assertEqual(
+                row["best_rank"], anchored_rank(row, "total_max", "total_min")
             )
-            worst = 1 + sum(
-                1 for o in rows if o["contestant"] != row["contestant"]
-                and o["total_max"] > row["total_min"] + 1e-9
+            self.assertEqual(
+                row["worst_rank"], anchored_rank(row, "total_min", "total_max")
             )
-            self.assertEqual(row["best_rank"], best)
-            self.assertEqual(row["worst_rank"], worst)
 
     def test_03_overflow_rejected(self):
         # C1 在 I1 已有 2 条评分，目标 1 < 2 → 400。
