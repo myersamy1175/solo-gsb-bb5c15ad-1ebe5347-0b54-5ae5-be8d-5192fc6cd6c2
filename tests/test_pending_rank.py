@@ -115,6 +115,24 @@ class TestPendingRankBounds(unittest.TestCase):
         # C3 固定为 19，被两人超过 → 最好=最差=3。
         self.assertEqual((rows["C3"]["best_rank"], rows["C3"]["worst_rank"]), (3, 3))
 
+    def test_chain_ties_dont_propagate_across_anchor(self):
+        # 甲 90、乙 90-0.6e-9（与甲并列第一）、丙 90-1.2e-9（与甲差已超容差），
+        # 丁为低分垫场。待补分固定为 0、目标人数等于已有评分数时，总分区间退化
+        # 为当前总分：锚定分组给出 1、1、3、4；旧的「逐对计数」会把甲、乙、丙
+        # 链式并成三人第一。
+        rows_data = [
+            ("甲", "J1", "I1", 90.0),
+            ("乙", "J1", "I1", 90.0 - 6e-10),
+            ("丙", "J1", "I1", 90.0 - 12e-10),
+            ("丁", "J1", "I1", 80.0),
+        ]
+        r = run(rows=rows_data, item="I1", target=1, lo=0.0, hi=0.0)
+        rows = by_name(r)
+        for name, rank in (("甲", 1), ("乙", 1), ("丙", 3), ("丁", 4)):
+            self.assertEqual(rows[name]["rank"], rank, name)
+            self.assertEqual(rows[name]["best_rank"], rank, name)
+            self.assertEqual(rows[name]["worst_rank"], rank, name)
+
     def test_gap_zero_when_target_equals_existing(self):
         # target=2：C1 已有 2 条 → 缺口 0，均分/总分区间退化为现值。
         rows = by_name(run(target=2, lo=0.0, hi=10.0))

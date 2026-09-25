@@ -10,8 +10,10 @@
 - 可达到的最好名次：本人总分取**上限**、他人总分取**下限**时的竞赛名次；
 - 可达到的最差名次：本人总分取**下限**、他人总分取**上限**时的竞赛名次。
 
-同分容差沿用主排名的 ``TIE_EPS``。若任一选手在该项目的已有评分数超过目标
-人数，整个请求被拒绝（由调用方转为 400）。
+同分容差沿用主排名的 ``TIE_EPS``，且名次直接复用主排名的锚定并列分组
+（:func:`app.scoring.competition_rank`）：以每组最高分锚定成员资格，相邻
+成绩逐跳相差极小也不会把分差已超容差的两人链式并为一组。若任一选手在该
+项目的已有评分数超过目标人数，整个请求被拒绝（由调用方转为 400）。
 
 整个计算只读，不触碰评分、裁决或会话；评分、裁决或校准范围变化后由调用方
 重新计算。
@@ -21,7 +23,7 @@ from __future__ import annotations
 import math
 from typing import Any, Mapping
 
-from .scoring import SCOPE_LABELS, TIE_EPS
+from .scoring import SCOPE_LABELS, competition_rank
 
 MAX_TARGET = 1_000_000
 
@@ -131,20 +133,29 @@ def pending_rank_bounds(
             }
         )
 
-    # 竞赛名次（1224）：严格高于本人的人数 + 1，同分容差与主排名一致。
+    # 竞赛名次（1224）：直接复用主排名的锚定分组（competition_rank），保证
+    # 待补评分名次边界与主排名使用完全相同的同分判定——以并列组最高分锚定
+    # 成员资格，杜绝相邻成绩逐跳比较造成的链式扩散（1e-9 容差沿链传递）。
+    # - 可达到最好名次：本人总分取上限、他人总分取下限；
+    # - 可达到最差名次：本人总分取下限、他人总分取上限。
     for row in rows:
-        own_max = row["total_max"]
-        own_min = row["total_min"]
-        row["best_rank"] = 1 + sum(
-            1
+        name = row["contestant"]
+        best_pairs = [
+            (
+                other["contestant"],
+                other["total_max"] if other is row else other["total_min"],
+            )
             for other in rows
-            if other is not row and other["total_min"] > own_max + TIE_EPS
-        )
-        row["worst_rank"] = 1 + sum(
-            1
+        ]
+        worst_pairs = [
+            (
+                other["contestant"],
+                other["total_min"] if other is row else other["total_max"],
+            )
             for other in rows
-            if other is not row and other["total_max"] > own_min + TIE_EPS
-        )
+        ]
+        row["best_rank"] = competition_rank(best_pairs)[name]
+        row["worst_rank"] = competition_rank(worst_pairs)[name]
 
     scope = analysis.get("scope", "")
     return {

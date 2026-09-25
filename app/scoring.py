@@ -56,13 +56,28 @@ def robust_params(values: Sequence[float]) -> tuple[float, float, float]:
 
 
 def competition_rank(pairs: Iterable[tuple[Any, float]]) -> dict[Any, int]:
-    """Rank (key, total) pairs highest-first with competition ranking (1224)."""
+    """Rank (key, total) pairs highest-first with competition ranking (1224).
+
+    Ties use :data:`TIE_EPS`, but membership is anchored to the **highest**
+    score of each tie group rather than compared against the previous row:
+    a member joins the current group only if within TIE_EPS of the group's
+    anchor. Once a score falls outside the anchor's tolerance it opens a new
+    group (anchored to itself), so a chain of sub-epsilon adjacent gaps can
+    no longer merge contestants whose mutual gap already exceeds TIE_EPS
+    (e.g. 90 / 89.9999999994 / 89.9999999988 -> ranks 1, 1, 3, not 1, 1, 1).
+    Within a tie the secondary name sort (``str(key)``) keeps output stable.
+    """
     ordered = sorted(pairs, key=lambda p: (-p[1], str(p[0])))
     ranks: dict[Any, int] = {}
+    group_start = 0
+    anchor = ordered[0][1] if ordered else 0.0
     for i, (key, total) in enumerate(ordered):
-        if i > 0 and abs(total - ordered[i - 1][1]) <= TIE_EPS:
-            ranks[key] = ranks[ordered[i - 1][0]]
+        if i > 0 and abs(total - anchor) <= TIE_EPS:
+            ranks[key] = group_start + 1
         else:
+            # 超出当前组最高分锚定的容差：另开一组并以本人为新锚。
+            group_start = i
+            anchor = total
             ranks[key] = i + 1
     return ranks
 

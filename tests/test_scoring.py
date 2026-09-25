@@ -44,6 +44,34 @@ class TestRank(unittest.TestCase):
         self.assertEqual(ranks["c"], 3)
         self.assertEqual(ranks["d"], 4)
 
+    def test_no_chain_propagation_across_anchor(self):
+        # 相邻两人分差都在 1e-9 容差内（0.6e-9），但组首甲与丙的差（1.2e-9）
+        # 已超容差：不得沿排序链逐跳传递，把三人误并为并列第一（应为 1、1、3）。
+        pairs = [("甲", 90.0), ("乙", 90.0 - 6e-10), ("丙", 90.0 - 12e-10)]
+        ranks = competition_rank(pairs)
+        self.assertEqual(ranks["甲"], 1)
+        self.assertEqual(ranks["乙"], 1)
+        self.assertEqual(ranks["丙"], 3)
+
+    def test_new_group_reanchors_after_out_of_band_member(self):
+        # 甲=乙（并列第一），丙超界另开一组，丁恰在丙的容差内但与甲组首超界：
+        # 丁并入丙组而非甲组，名次为 1、1、3、3。
+        pairs = [
+            ("a", 90.0),
+            ("b", 90.0),
+            ("c", 90.0 - 12e-10),
+            ("d", 90.0 - 12e-10 - 5e-10),
+        ]
+        ranks = competition_rank(pairs)
+        self.assertEqual([ranks[k] for k in ("a", "b", "c", "d")], [1, 1, 3, 3])
+
+    def test_tie_name_sort_is_stable(self):
+        # 同分时按名称稳定排序，但名次相同；传入顺序不影响结果。
+        pairs = [("z", 5.0), ("a", 5.0), ("m", 5.0)]
+        ranks = competition_rank(pairs)
+        self.assertEqual([ranks[k] for k in ("z", "a", "m")], [1, 1, 1])
+        self.assertEqual(list(competition_rank(reversed(pairs)).values()), [1, 1, 1])
+
 
 class TestCalibration(unittest.TestCase):
     def setUp(self):
@@ -109,6 +137,29 @@ class TestCalibration(unittest.TestCase):
         # 2 judges x 2 items = 4 groups
         self.assertEqual(len(a["groups"]), 4)
         self.assertIn("item", a["groups"][0])
+
+    def test_chain_ties_rank_anchored_in_analysis(self):
+        # 单评委单项目、全部「保留原分」：校准分 == 原分 == 最终分。
+        # 甲=90、乙=90-0.6e-9（与甲并列）、丙=90-1.2e-9（与甲已超容差）：
+        # 原分 / 校准分 / 最终分名次都必须是 1、1、3，不得链式并成三人第一。
+        data = [
+            ("甲", "J1", "I1", 90.0),
+            ("乙", "J1", "I1", 90.0 - 6e-10),
+            ("丙", "J1", "I1", 90.0 - 12e-10),
+        ]
+        records = recs(data)
+        decisions = {r["id"]: (True, "raw") for r in records}
+        a = analyze(records, decisions, "judge")
+        blocks = {b["contestant"]: b for b in a["contestants"]}
+        for kind in ("raw_rank", "cal_rank", "eff_rank"):
+            self.assertEqual(blocks["甲"][kind], 1, kind)
+            self.assertEqual(blocks["乙"][kind], 1, kind)
+            self.assertEqual(blocks["丙"][kind], 3, kind)
+        # 块仍按最终名次排序；同分组内按名称稳定排序（乙先于甲）。
+        self.assertEqual(
+            [(b["eff_rank"], b["contestant"]) for b in a["contestants"]],
+            [(1, "乙"), (1, "甲"), (3, "丙")],
+        )
 
     def test_reversal_detected(self):
         # Two tight judges rank C1 first; one wide-spread judge ranks C2 far
